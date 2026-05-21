@@ -18,6 +18,9 @@ import com.example.deskcat.MainActivity
 import com.example.deskcat.PetMood
 import com.example.deskcat.R
 import com.example.deskcat.pet.PetStateRepository
+import com.example.deskcat.settings.PetImageResolver
+import com.example.deskcat.settings.PetPreferencesRepository
+import com.example.deskcat.settings.PetSettingsUiState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -55,6 +58,7 @@ class DesktopPetOverlayView(
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val petPreferencesRepository = PetPreferencesRepository(context)
     private val rootView = FrameLayout(context).apply {
         clipChildren = false
         clipToPadding = false
@@ -113,7 +117,10 @@ class DesktopPetOverlayView(
     private var moved = false
     private var currentMood: PetMood = PetMood.Chill
     private var currentSpeech: String = ""
+    private var currentSettings = PetSettingsUiState()
     private var animationJob: Job? = null
+    private var autoMoveJob: Job? = null
+    private var lastInteractionAt = System.currentTimeMillis()
 
     init {
         setupActionButtons()
@@ -133,6 +140,7 @@ class DesktopPetOverlayView(
                     downX = overlayLayoutParams.x
                     downY = overlayLayoutParams.y
                     moved = false
+                    lastInteractionAt = System.currentTimeMillis()
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -140,6 +148,7 @@ class DesktopPetOverlayView(
                     val deltaY = event.rawY - downRawY
                     if (abs(deltaX) > 6 || abs(deltaY) > 6) {
                         moved = true
+                        autoMoveJob?.cancel()
                     }
                     overlayLayoutParams.x = clampX(downX + deltaX.toInt())
                     overlayLayoutParams.y = clampY(downY + deltaY.toInt())
@@ -168,6 +177,17 @@ class DesktopPetOverlayView(
                 refreshSpeechVisibility()
                 if (!collapsedToEdge) {
                     playMoodSequence(currentMood)
+                    scheduleAutoMove()
+                }
+            }
+        }
+
+        scope.launch {
+            petPreferencesRepository.settingsFlow.collect { settings ->
+                currentSettings = settings
+                updatePetImageFromSettings()
+                if (!collapsedToEdge) {
+                    scheduleAutoMove()
                 }
             }
         }
@@ -177,8 +197,9 @@ class DesktopPetOverlayView(
         if (attached) return
         windowManager.addView(rootView, overlayLayoutParams)
         attached = true
-        petImage.setImageResource(R.drawable.cat5_re)
+        updatePetImageFromSettings()
         playMoodSequence(currentMood)
+        scheduleAutoMove()
     }
 
     fun remove() {
@@ -189,6 +210,30 @@ class DesktopPetOverlayView(
         attached = false
     }
 
+    fun collapseToEdge() {
+        if (!attached) return
+        lastInteractionAt = System.currentTimeMillis()
+        collapsedToEdge = true
+        expanded = false
+        dockOnRight = overlayLayoutParams.x > screenWidth() / 2
+        overlayLayoutParams.x = if (dockOnRight) {
+            max(0, screenWidth() - collapsedWidth())
+        } else {
+            0
+        }
+        overlayLayoutParams.y = clampY(overlayLayoutParams.y)
+        speechView.visibility = View.GONE
+        actionRow.visibility = View.GONE
+        autoMoveJob?.cancel()
+        animationJob?.cancel()
+        if (currentSettings.useCustomImage) {
+            updatePetImageFromSettings()
+        } else {
+            petImage.setImageResource(R.drawable.cat9_re)
+        }
+        updateOverlayPosition()
+    }
+
     private fun toggleExpanded() {
         expanded = !expanded
         collapsedToEdge = false
@@ -196,6 +241,7 @@ class DesktopPetOverlayView(
         if (!expanded) {
             playMoodSequence(currentMood)
         }
+        scheduleAutoMove()
     }
 
     private fun expandFromEdge() {
@@ -223,7 +269,11 @@ class DesktopPetOverlayView(
             speechView.visibility = View.GONE
             actionRow.visibility = View.GONE
             animationJob?.cancel()
-            petImage.setImageResource(R.drawable.cat9_re)
+            if (currentSettings.useCustomImage) {
+                updatePetImageFromSettings()
+            } else {
+                petImage.setImageResource(R.drawable.cat9_re)
+            }
         } else {
             overlayLayoutParams.x = clampX(overlayLayoutParams.x)
             overlayLayoutParams.y = clampY(overlayLayoutParams.y)
@@ -253,6 +303,10 @@ class DesktopPetOverlayView(
     private fun playMoodSequence(mood: PetMood) {
         if (collapsedToEdge) {
             petImage.setImageResource(R.drawable.cat9_re)
+            return
+        }
+        if (currentSettings.useCustomImage) {
+            updatePetImageFromSettings()
             return
         }
         animationJob?.cancel()
@@ -297,6 +351,7 @@ class DesktopPetOverlayView(
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             context.startActivity(intent)
         })
+        scheduleAutoMove()
     }
 
     private fun createActionButton(text: String, onClick: () -> Unit): TextView {
@@ -309,6 +364,38 @@ class DesktopPetOverlayView(
             setPadding(dp(12), dp(8), dp(12), dp(8))
             background = roundedDrawable(0xFFF1E7D7.toInt(), 999f, 0)
             setOnClickListener { onClick() }
+        }
+    }
+
+    private fun updatePetImageFromSettings() {
+        val customBitmap = PetImageResolver.decodeBitmap(context, currentSettings.imageUri)
+        if (customBitmap != null) {
+            petImage.setImageBitmap(customBitmap)
+        } else {
+            petImage.setImageResource(R.drawable.cat5_re)
+        }
+        val size = dp(132f * currentSettings.sizeScale)
+        petFrame.layoutParams = LinearLayout.LayoutParams(size, size)
+        petFrame.minimumWidth = size
+        petFrame.minimumHeight = size
+        petImage.layoutParams = FrameLayout.LayoutParams(size, size, Gravity.CENTER)
+        rootView.requestLayout()
+    }
+
+    private fun scheduleAutoMove() {
+        autoMoveJob?.cancel()
+        if (!currentSettings.autoMoveEnabled || expanded || collapsedToEdge || !attached) return
+        autoMoveJob = scope.launch {
+            delay(3_000)
+            if (!expanded && !collapsedToEdge && attached && System.currentTimeMillis() - lastInteractionAt >= 3_000) {
+                val drift = dp(18)
+                val direction = if (dockOnRight) -1 else 1
+                overlayLayoutParams.x = clampX(overlayLayoutParams.x + drift * direction)
+                overlayLayoutParams.y = clampY(overlayLayoutParams.y - dp(8))
+                updateOverlayPosition()
+                lastInteractionAt = System.currentTimeMillis()
+                scheduleAutoMove()
+            }
         }
     }
 

@@ -23,9 +23,20 @@ class DesktopPetOverlayService : Service() {
         overlayView?.show()
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_COLLAPSE_TO_EDGE) {
+            overlayView?.collapseToEdge()
+        }
+        return START_STICKY
+    }
+
     override fun onDestroy() {
         overlayView?.remove()
         overlayView = null
         super.onDestroy()
+    }
+
+    companion object {
+        const val ACTION_COLLAPSE_TO_EDGE = "com.example.deskcat.action.COLLAPSE_TO_EDGE"
     }
 }

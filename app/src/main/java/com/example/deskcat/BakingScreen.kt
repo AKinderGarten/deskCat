@@ -30,7 +30,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
@@ -38,40 +37,55 @@ import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.deskcat.settings.PetImageResolver
+import com.example.deskcat.settings.PetSettingsUiState
+import com.example.deskcat.settings.PetSettingsViewModel
+import com.example.deskcat.settings.PetSizePreset
 import kotlin.math.roundToInt
 
 @Composable
 fun BakingScreen(
     bakingViewModel: BakingViewModel = viewModel(),
+    settingsViewModel: PetSettingsViewModel,
     overlayGranted: Boolean,
     overlayRunning: Boolean,
+    onPickCustomImage: (((android.net.Uri?) -> Unit) -> Unit),
     onOpenOverlayPermission: () -> Unit,
     onStartOverlay: () -> Unit,
     onStopOverlay: () -> Unit,
 ) {
     val uiState by bakingViewModel.uiState.collectAsState()
+    val settingsState by settingsViewModel.uiState.collectAsState()
     val scrollState = rememberScrollState()
+    var settingsExpanded by remember { mutableStateOf(false) }
     val floatTransition = rememberInfiniteTransition(label = "petFloat")
     val floatOffset by floatTransition.animateFloat(
         initialValue = 0f,
@@ -143,13 +157,33 @@ fun BakingScreen(
         ) {
             HeaderCard(
                 uiState = uiState,
+                settingsState = settingsState,
                 overlayGranted = overlayGranted,
                 overlayRunning = overlayRunning,
-                onOpenOverlayPermission = onOpenOverlayPermission,
+                onToggleSettings = { settingsExpanded = !settingsExpanded },
                 onStartOverlay = onStartOverlay,
                 onStopOverlay = onStopOverlay,
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            if (settingsExpanded) {
+                PetSettingsPanel(
+                    settingsState = settingsState,
+                    onPickCustomImage = {
+                        onPickCustomImage { uri ->
+                            settingsViewModel.setImageUri(uri?.toString())
+                        }
+                    },
+                    onResetImage = { settingsViewModel.setImageUri(null) },
+                    onSelectPreset = { preset, scale ->
+                        settingsViewModel.setSizePreset(preset)
+                        settingsViewModel.setSizeScale(scale)
+                    },
+                    onScaleChange = settingsViewModel::setSizeScale,
+                    onAutoMoveChange = settingsViewModel::setAutoMoveEnabled,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
 
             Card(
                 modifier = Modifier
@@ -204,6 +238,7 @@ fun BakingScreen(
                                 ) {
                                     PetAvatar(
                                         mood = uiState.mood,
+                                        settingsState = settingsState,
                                         scale = petScale,
                                         rotation = petRotation,
                                         phase = floatOffset,
@@ -228,11 +263,130 @@ fun BakingScreen(
 }
 
 @Composable
+private fun PetSettingsPanel(
+    settingsState: PetSettingsUiState,
+    onPickCustomImage: () -> Unit,
+    onResetImage: () -> Unit,
+    onSelectPreset: (PetSizePreset, Float) -> Unit,
+    onScaleChange: (Float) -> Unit,
+    onAutoMoveChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xEEFFFFFF)),
+        shape = RoundedCornerShape(24.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        modifier = modifier,
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "桌宠设置",
+                color = Color(0xFF111111),
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = if (settingsState.useCustomImage) "当前使用自定义图片" else "当前使用内置动画图片",
+                color = Color(0xFF444444),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                AssistChip(
+                    onClick = onPickCustomImage,
+                    label = { Text("选择图片") },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = Color(0xFFF1E7D7),
+                        labelColor = Color(0xFF111111),
+                    ),
+                )
+                AssistChip(
+                    onClick = onResetImage,
+                    label = { Text("恢复默认") },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = Color(0xFFE8E2D8),
+                        labelColor = Color(0xFF111111),
+                    ),
+                )
+            }
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = "桌宠大小",
+                color = Color(0xFF111111),
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                AssistChip(
+                    onClick = { onSelectPreset(PetSizePreset.Small, 0.85f) },
+                    label = { Text("小") },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = if (settingsState.sizePreset == PetSizePreset.Small) Color(0xFFF7F4EE) else Color(0xFFF1E7D7),
+                        labelColor = Color(0xFF111111),
+                    ),
+                )
+                AssistChip(
+                    onClick = { onSelectPreset(PetSizePreset.Medium, 1f) },
+                    label = { Text("中") },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = if (settingsState.sizePreset == PetSizePreset.Medium) Color(0xFFF7F4EE) else Color(0xFFF1E7D7),
+                        labelColor = Color(0xFF111111),
+                    ),
+                )
+                AssistChip(
+                    onClick = { onSelectPreset(PetSizePreset.Large, 1.2f) },
+                    label = { Text("大") },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = if (settingsState.sizePreset == PetSizePreset.Large) Color(0xFFF7F4EE) else Color(0xFFF1E7D7),
+                        labelColor = Color(0xFF111111),
+                    ),
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "缩放 ${(settingsState.sizeScale * 100).roundToInt()}%",
+                color = Color(0xFF444444),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Slider(
+                value = settingsState.sizeScale,
+                onValueChange = onScaleChange,
+                valueRange = 0.8f..1.4f,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column {
+                    Text(
+                        text = "自动移动彩蛋",
+                        color = Color(0xFF111111),
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = "3 秒不拖动时，小猫会轻微自己动一下。",
+                        color = Color(0xFF666666),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(
+                    checked = settingsState.autoMoveEnabled,
+                    onCheckedChange = onAutoMoveChange,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun HeaderCard(
     uiState: DesktopPetUiState,
+    settingsState: PetSettingsUiState,
     overlayGranted: Boolean,
     overlayRunning: Boolean,
-    onOpenOverlayPermission: () -> Unit,
+    onToggleSettings: () -> Unit,
     onStartOverlay: () -> Unit,
     onStopOverlay: () -> Unit,
     modifier: Modifier = Modifier,
@@ -261,10 +415,10 @@ private fun HeaderCard(
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     AssistChip(
-                        onClick = onOpenOverlayPermission,
+                        onClick = onToggleSettings,
                         label = { Text("设置") },
                         colors = AssistChipDefaults.assistChipColors(
-                            containerColor = if (overlayGranted) Color(0xFFF1E7D7) else Color(0xFFE8E2D8),
+                            containerColor = if (settingsState.useCustomImage) Color(0xFFF1E7D7) else Color(0xFFE8E2D8),
                             labelColor = Color(0xFF111111),
                         ),
                     )
@@ -484,11 +638,17 @@ private fun BackgroundGlow() {
 @Composable
 private fun PetAvatar(
     mood: PetMood,
+    settingsState: PetSettingsUiState,
     scale: Float,
     rotation: Float,
     phase: Float,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    val customBitmap = remember(settingsState.imageUri) {
+        PetImageResolver.decodeBitmap(context, settingsState.imageUri)
+    }
+    val appliedScale = scale * settingsState.sizeScale
     val catFrame = when (mood) {
         PetMood.Chill -> R.drawable.cat5_re
         PetMood.Happy -> when {
@@ -553,16 +713,25 @@ private fun PetAvatar(
                 PetMood.Sleepy -> 0.6f
                 else -> 0.5f
             }
-            scaleX = scale
-            scaleY = scale
+            scaleX = appliedScale
+            scaleY = appliedScale
         },
         contentAlignment = Alignment.Center,
     ) {
-        Image(
-            painter = painterResource(id = catFrame),
-            contentDescription = "桌宠小猫",
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize(),
-        )
+        if (customBitmap != null) {
+            Image(
+                bitmap = customBitmap.asImageBitmap(),
+                contentDescription = "桌宠小猫",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Image(
+                painter = painterResource(id = catFrame),
+                contentDescription = "桌宠小猫",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }

@@ -17,6 +17,7 @@ import android.widget.TextView
 import com.example.deskcat.MainActivity
 import com.example.deskcat.PetMood
 import com.example.deskcat.R
+import com.example.deskcat.ai.AiAnimState
 import com.example.deskcat.pack.PetPack
 import com.example.deskcat.pack.PetPackLoader
 import com.example.deskcat.pet.PetStateRepository
@@ -130,6 +131,8 @@ class DesktopPetOverlayView(
     private var currentSpeech: String = ""
     private var currentSettings = PetSettingsUiState()
     private var currentPack: PetPack? = null
+    private var aiFrames: List<android.graphics.Bitmap>? = null
+    private var aiFrameJob: Job? = null
     private var animationJob: Job? = null
     private var autoMoveJob: Job? = null
     private var pawAnimJob: Job? = null
@@ -207,6 +210,19 @@ class DesktopPetOverlayView(
                 }
             }
         }
+
+        scope.launch {
+            AiAnimState.frames.collect { frames ->
+                aiFrames = frames
+                if (frames != null) {
+                    startAiFrameLoop(frames)
+                } else {
+                    stopAiFrameLoop()
+                    // 恢复正常图片
+                    updatePetImageFromSettings()
+                }
+            }
+        }
     }
 
     fun show() {
@@ -221,6 +237,7 @@ class DesktopPetOverlayView(
     fun remove() {
         animationJob?.cancel()
         pawAnimJob?.cancel()
+        aiFrameJob?.cancel()
         scope.cancel()
         if (!attached) return
         windowManager.removeView(rootView)
@@ -403,6 +420,24 @@ class DesktopPetOverlayView(
     private fun stopPawAnimation() {
         pawAnimJob?.cancel()
         pawView.visibility = View.GONE
+    }
+
+    private fun startAiFrameLoop(frames: List<android.graphics.Bitmap>) {
+        aiFrameJob?.cancel()
+        if (frames.isEmpty()) return
+        aiFrameJob = scope.launch {
+            var index = 0
+            while (true) {
+                petImage.setImageBitmap(frames[index])
+                index = (index + 1) % frames.size
+                delay(125L) // 8fps
+            }
+        }
+    }
+
+    private fun stopAiFrameLoop() {
+        aiFrameJob?.cancel()
+        aiFrameJob = null
     }
 
     private fun setupActionButtons() {

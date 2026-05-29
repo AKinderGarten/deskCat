@@ -45,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -71,6 +72,7 @@ import com.example.deskcat.settings.PetSettingsViewModel
 import com.example.deskcat.settings.PetSizePreset
 import com.example.deskcat.settings.PetStyle
 import com.example.deskcat.settings.toAnimParams
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 @Composable
@@ -88,6 +90,8 @@ fun BakingScreen(
     val uiState by bakingViewModel.uiState.collectAsState()
     val settingsState by settingsViewModel.uiState.collectAsState()
     val analyzing by settingsViewModel.analyzing.collectAsState()
+    val generatingAnim by settingsViewModel.generatingAnim.collectAsState()
+    val aiAnimFrames by settingsViewModel.aiAnimFrames.collectAsState()
     val context = LocalContext.current
     val scrollState = rememberScrollState()
     var settingsExpanded by remember { mutableStateOf(false) }
@@ -175,6 +179,8 @@ fun BakingScreen(
                 PetSettingsPanel(
                     settingsState = settingsState,
                     analyzing = analyzing,
+                    generatingAnim = generatingAnim,
+                    hasAiAnim = aiAnimFrames != null,
                     onPickCustomImage = {
                         onPickCustomImage { uri ->
                             settingsViewModel.analyzeAndSetImage(context, uri?.toString())
@@ -187,6 +193,8 @@ fun BakingScreen(
                         }
                     },
                     onClearPetPack = { settingsViewModel.clearPetPack(context) },
+                    onGenerateAiAnim = { settingsViewModel.generateAiAnimation(context) },
+                    onClearAiAnim = { settingsViewModel.clearAiAnimation() },
                     onSelectPreset = { preset, scale ->
                         settingsViewModel.setSizePreset(preset)
                         settingsViewModel.setSizeScale(scale)
@@ -251,6 +259,7 @@ fun BakingScreen(
                                     PetAvatar(
                                         mood = uiState.mood,
                                         settingsState = settingsState,
+                                        aiAnimFrames = aiAnimFrames,
                                         scale = petScale,
                                         rotation = petRotation,
                                         phase = floatOffset,
@@ -278,10 +287,14 @@ fun BakingScreen(
 private fun PetSettingsPanel(
     settingsState: PetSettingsUiState,
     analyzing: Boolean,
+    generatingAnim: Boolean,
+    hasAiAnim: Boolean,
     onPickCustomImage: () -> Unit,
     onResetImage: () -> Unit,
     onImportPetPack: () -> Unit,
     onClearPetPack: () -> Unit,
+    onGenerateAiAnim: () -> Unit,
+    onClearAiAnim: () -> Unit,
     onSelectPreset: (PetSizePreset, Float) -> Unit,
     onScaleChange: (Float) -> Unit,
     onAutoMoveChange: (Boolean) -> Unit,
@@ -381,6 +394,47 @@ private fun PetSettingsPanel(
                         labelColor = Color(0xFF111111),
                     ),
                 )
+            }
+
+            // AI 动画生成区域
+            if (settingsState.useCustomImage) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "AI 动画生成",
+                    color = Color(0xFF111111),
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = when {
+                        generatingAnim -> "正在调用豆包 AI 生成动画帧..."
+                        hasAiAnim -> "已生成 AI 动画，正在预览播放"
+                        else -> "基于当前图片，用豆包 AI 生成逐帧动画"
+                    },
+                    color = if (generatingAnim) Color(0xFF888888) else Color(0xFF444444),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    AssistChip(
+                        onClick = { if (!generatingAnim && !analyzing) onGenerateAiAnim() },
+                        label = { Text(if (generatingAnim) "生成中..." else "生成动画") },
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = Color(0xFFF1E7D7),
+                            labelColor = Color(0xFF111111),
+                        ),
+                    )
+                    if (hasAiAnim) {
+                        AssistChip(
+                            onClick = onClearAiAnim,
+                            label = { Text("清除动画") },
+                            colors = AssistChipDefaults.assistChipColors(
+                                containerColor = Color(0xFFE8E2D8),
+                                labelColor = Color(0xFF111111),
+                            ),
+                        )
+                    }
+                }
             }
             Spacer(modifier = Modifier.height(14.dp))
             Text(
@@ -712,6 +766,7 @@ private fun BackgroundGlow() {
 private fun PetAvatar(
     mood: PetMood,
     settingsState: PetSettingsUiState,
+    aiAnimFrames: List<android.graphics.Bitmap>?,
     scale: Float,
     rotation: Float,
     phase: Float,
@@ -723,6 +778,20 @@ private fun PetAvatar(
     }
     val animParams = remember(settingsState.petStyle) { settingsState.petStyle.toAnimParams() }
     val appliedScale = scale * settingsState.sizeScale
+
+    // AI 帧动画播放：以 8fps 循环切换帧
+    var aiFrameIndex by remember { mutableIntStateOf(0) }
+    LaunchedEffect(aiAnimFrames) {
+        if (aiAnimFrames.isNullOrEmpty()) {
+            aiFrameIndex = 0
+            return@LaunchedEffect
+        }
+        while (true) {
+            delay(125L) // 8fps
+            aiFrameIndex = (aiFrameIndex + 1) % aiAnimFrames.size
+        }
+    }
+
     val catFrame = when (mood) {
         PetMood.Chill -> R.drawable.cat5_re
         PetMood.Happy -> when {
@@ -792,20 +861,31 @@ private fun PetAvatar(
         },
         contentAlignment = Alignment.Center,
     ) {
-        if (customBitmap != null) {
-            Image(
-                bitmap = customBitmap.asImageBitmap(),
-                contentDescription = "桌宠小猫",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            Image(
-                painter = painterResource(id = catFrame),
-                contentDescription = "桌宠小猫",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize(),
-            )
+        when {
+            !aiAnimFrames.isNullOrEmpty() -> {
+                Image(
+                    bitmap = aiAnimFrames[aiFrameIndex].asImageBitmap(),
+                    contentDescription = "桌宠小猫",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            customBitmap != null -> {
+                Image(
+                    bitmap = customBitmap.asImageBitmap(),
+                    contentDescription = "桌宠小猫",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            else -> {
+                Image(
+                    painter = painterResource(id = catFrame),
+                    contentDescription = "桌宠小猫",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
     }
 }

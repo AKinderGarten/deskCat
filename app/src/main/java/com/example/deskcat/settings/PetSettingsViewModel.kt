@@ -1,10 +1,13 @@
 package com.example.deskcat.settings
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.deskcat.ai.AiAnimState
+import com.example.deskcat.ai.DoubaoAnimGenerator
 import com.example.deskcat.pack.PetPackLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,6 +28,13 @@ class PetSettingsViewModel(
 
     private val _analyzing = MutableStateFlow(false)
     val analyzing: StateFlow<Boolean> = _analyzing.asStateFlow()
+
+    private val _generatingAnim = MutableStateFlow(false)
+    val generatingAnim: StateFlow<Boolean> = _generatingAnim.asStateFlow()
+
+    // 豆包生成的动画帧，null 表示未生成或已清除
+    private val _aiAnimFrames = MutableStateFlow<List<Bitmap>?>(null)
+    val aiAnimFrames: StateFlow<List<Bitmap>?> = _aiAnimFrames.asStateFlow()
 
     fun setImageUri(uri: String?) {
         viewModelScope.launch {
@@ -98,6 +108,34 @@ class PetSettingsViewModel(
             PetPackLoader.clearPack(context)
             repository.setPetPackDir(null)
         }
+    }
+
+    /**
+     * 根据当前自定义图片调用豆包 API 生成逐帧动画。
+     * 生成完成后帧列表通过 [aiAnimFrames] 暴露，overlay 和预览都可订阅播放。
+     */
+    fun generateAiAnimation(context: Context) {
+        val uri = uiState.value.imageUri ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            _generatingAnim.value = true
+            try {
+                val bitmap = PetImageResolver.decodeAndRemoveBackground(context, uri)
+                    ?: PetImageResolver.decodeBitmap(context, uri)
+                if (bitmap != null) {
+                    val frames = DoubaoAnimGenerator.generate(bitmap)
+                    val result = if (frames.isNotEmpty()) frames else null
+                    _aiAnimFrames.value = result
+                    AiAnimState.update(result)
+                }
+            } finally {
+                _generatingAnim.value = false
+            }
+        }
+    }
+
+    fun clearAiAnimation() {
+        _aiAnimFrames.value = null
+        AiAnimState.update(null)
     }
 
     class Factory(

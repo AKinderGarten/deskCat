@@ -69,6 +69,8 @@ import com.example.deskcat.settings.PetImageResolver
 import com.example.deskcat.settings.PetSettingsUiState
 import com.example.deskcat.settings.PetSettingsViewModel
 import com.example.deskcat.settings.PetSizePreset
+import com.example.deskcat.settings.PetStyle
+import com.example.deskcat.settings.toAnimParams
 import kotlin.math.roundToInt
 
 @Composable
@@ -78,12 +80,15 @@ fun BakingScreen(
     overlayGranted: Boolean,
     overlayRunning: Boolean,
     onPickCustomImage: (((android.net.Uri?) -> Unit) -> Unit),
+    onImportPetPack: (((android.net.Uri?) -> Unit) -> Unit),
     onOpenOverlayPermission: () -> Unit,
     onStartOverlay: () -> Unit,
     onStopOverlay: () -> Unit,
 ) {
     val uiState by bakingViewModel.uiState.collectAsState()
     val settingsState by settingsViewModel.uiState.collectAsState()
+    val analyzing by settingsViewModel.analyzing.collectAsState()
+    val context = LocalContext.current
     val scrollState = rememberScrollState()
     var settingsExpanded by remember { mutableStateOf(false) }
     val floatTransition = rememberInfiniteTransition(label = "petFloat")
@@ -169,12 +174,19 @@ fun BakingScreen(
             if (settingsExpanded) {
                 PetSettingsPanel(
                     settingsState = settingsState,
+                    analyzing = analyzing,
                     onPickCustomImage = {
                         onPickCustomImage { uri ->
-                            settingsViewModel.setImageUri(uri?.toString())
+                            settingsViewModel.analyzeAndSetImage(context, uri?.toString())
                         }
                     },
                     onResetImage = { settingsViewModel.setImageUri(null) },
+                    onImportPetPack = {
+                        onImportPetPack { uri ->
+                            if (uri != null) settingsViewModel.importPetPackFromZip(context, uri)
+                        }
+                    },
+                    onClearPetPack = { settingsViewModel.clearPetPack(context) },
                     onSelectPreset = { preset, scale ->
                         settingsViewModel.setSizePreset(preset)
                         settingsViewModel.setSizeScale(scale)
@@ -265,8 +277,11 @@ fun BakingScreen(
 @Composable
 private fun PetSettingsPanel(
     settingsState: PetSettingsUiState,
+    analyzing: Boolean,
     onPickCustomImage: () -> Unit,
     onResetImage: () -> Unit,
+    onImportPetPack: () -> Unit,
+    onClearPetPack: () -> Unit,
     onSelectPreset: (PetSizePreset, Float) -> Unit,
     onScaleChange: (Float) -> Unit,
     onAutoMoveChange: (Boolean) -> Unit,
@@ -285,23 +300,81 @@ private fun PetSettingsPanel(
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(modifier = Modifier.height(10.dp))
+
+            // 资源包区域
             Text(
-                text = if (settingsState.useCustomImage) "当前使用自定义图片" else "当前使用内置动画图片",
-                color = Color(0xFF444444),
-                style = MaterialTheme.typography.bodyMedium,
+                text = "动画资源包",
+                color = Color(0xFF111111),
+                fontWeight = FontWeight.Medium,
             )
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = if (settingsState.usePetPack) "已加载资源包（body + paw_up + paw_down）" else "未加载资源包，使用内置动画",
+                color = Color(0xFF444444),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 AssistChip(
-                    onClick = onPickCustomImage,
-                    label = { Text("选择图片") },
+                    onClick = onImportPetPack,
+                    label = { Text("导入资源包 (.zip)") },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = Color(0xFFF1E7D7),
+                        labelColor = Color(0xFF111111),
+                    ),
+                )
+                if (settingsState.usePetPack) {
+                    AssistChip(
+                        onClick = onClearPetPack,
+                        label = { Text("清除") },
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = Color(0xFFE8E2D8),
+                            labelColor = Color(0xFF111111),
+                        ),
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // 单图模式
+            Text(
+                text = "单张图片模式",
+                color = Color(0xFF111111),
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            val statusText = when {
+                analyzing -> "正在识别宠物并处理图片..."
+                settingsState.useCustomImage && settingsState.detectedLabel != null -> {
+                    val styleName = when (settingsState.petStyle) {
+                        com.example.deskcat.settings.PetStyle.Cat -> "猫咪（慵懒风格）"
+                        com.example.deskcat.settings.PetStyle.Dog -> "狗狗（活泼风格）"
+                        com.example.deskcat.settings.PetStyle.Rabbit -> "兔子（温柔风格）"
+                        com.example.deskcat.settings.PetStyle.Default -> "未知宠物（默认风格）"
+                    }
+                    "已识别：${settingsState.detectedLabel} → $styleName"
+                }
+                settingsState.useCustomImage -> "当前使用自定义图片"
+                else -> "当前使用内置动画图片"
+            }
+            Text(
+                text = statusText,
+                color = if (analyzing) Color(0xFF888888) else Color(0xFF444444),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                AssistChip(
+                    onClick = { if (!analyzing) onPickCustomImage() },
+                    label = { Text(if (analyzing) "识别中..." else "选择图片") },
                     colors = AssistChipDefaults.assistChipColors(
                         containerColor = Color(0xFFF1E7D7),
                         labelColor = Color(0xFF111111),
                     ),
                 )
                 AssistChip(
-                    onClick = onResetImage,
+                    onClick = { if (!analyzing) onResetImage() },
                     label = { Text("恢复默认") },
                     colors = AssistChipDefaults.assistChipColors(
                         containerColor = Color(0xFFE8E2D8),
@@ -648,6 +721,7 @@ private fun PetAvatar(
     val customBitmap = remember(settingsState.imageUri) {
         PetImageResolver.decodeBitmap(context, settingsState.imageUri)
     }
+    val animParams = remember(settingsState.petStyle) { settingsState.petStyle.toAnimParams() }
     val appliedScale = scale * settingsState.sizeScale
     val catFrame = when (mood) {
         PetMood.Chill -> R.drawable.cat5_re
@@ -695,19 +769,19 @@ private fun PetAvatar(
 
     Box(
         modifier = modifier.graphicsLayer {
-            translationX = moodNudgeX + wave * when (mood) {
+            translationX = moodNudgeX + wave * animParams.swingMagnitude * when (mood) {
                 PetMood.Excited -> 2.4f
                 PetMood.Happy -> 1.2f
                 PetMood.Sleepy -> 0.8f
                 else -> 1f
             }
-            translationY = moodNudgeY + wave * when (mood) {
+            translationY = moodNudgeY + wave * animParams.bounceMagnitude * when (mood) {
                 PetMood.Excited -> 1.8f
                 PetMood.Happy -> 1f
                 PetMood.Sleepy -> 1.2f
                 else -> 0.9f
             }
-            rotationZ = rotation + moodTilt + wave * when (mood) {
+            rotationZ = rotation + moodTilt + wave * animParams.tiltRange * when (mood) {
                 PetMood.Excited -> 1.3f
                 PetMood.Happy -> 0.7f
                 PetMood.Sleepy -> 0.6f

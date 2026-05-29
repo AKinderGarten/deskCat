@@ -17,10 +17,13 @@ import android.widget.TextView
 import com.example.deskcat.MainActivity
 import com.example.deskcat.PetMood
 import com.example.deskcat.R
+import com.example.deskcat.pack.PetPack
+import com.example.deskcat.pack.PetPackLoader
 import com.example.deskcat.pet.PetStateRepository
 import com.example.deskcat.settings.PetImageResolver
 import com.example.deskcat.settings.PetPreferencesRepository
 import com.example.deskcat.settings.PetSettingsUiState
+import com.example.deskcat.settings.toAnimParams
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,6 +40,10 @@ class DesktopPetOverlayView(
     private val context: Context,
     private val windowManager: WindowManager,
 ) {
+    private fun dp(value: Float): Int =
+        (value * context.resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int = dp(value.toFloat())
+
     private val overlayLayoutParams = WindowManager.LayoutParams(
         WindowManager.LayoutParams.WRAP_CONTENT,
         WindowManager.LayoutParams.WRAP_CONTENT,
@@ -100,10 +107,14 @@ class DesktopPetOverlayView(
         foregroundGravity = Gravity.CENTER
     }
     private val petImage = ImageView(context).apply {
-        layoutParams = FrameLayout.LayoutParams(dp(132), dp(132), Gravity.CENTER)
         scaleType = ImageView.ScaleType.FIT_CENTER
         adjustViewBounds = true
         setImageResource(R.drawable.cat5_re)
+    }
+    private val pawView = ImageView(context).apply {
+        scaleType = ImageView.ScaleType.FIT_CENTER
+        adjustViewBounds = true
+        visibility = View.GONE
     }
 
     private var attached = false
@@ -118,13 +129,18 @@ class DesktopPetOverlayView(
     private var currentMood: PetMood = PetMood.Chill
     private var currentSpeech: String = ""
     private var currentSettings = PetSettingsUiState()
+    private var currentPack: PetPack? = null
     private var animationJob: Job? = null
     private var autoMoveJob: Job? = null
+    private var pawAnimJob: Job? = null
     private var lastInteractionAt = System.currentTimeMillis()
 
     init {
         setupActionButtons()
+        petImage.layoutParams = FrameLayout.LayoutParams(dp(132), dp(132), Gravity.CENTER)
         petFrame.addView(petImage)
+        pawView.layoutParams = FrameLayout.LayoutParams(dp(132), dp(132), Gravity.CENTER)
+        petFrame.addView(pawView)
         contentLayout.addView(speechView)
         contentLayout.addView(spaceView(dp(8)))
         contentLayout.addView(actionRow)
@@ -204,6 +220,7 @@ class DesktopPetOverlayView(
 
     fun remove() {
         animationJob?.cancel()
+        pawAnimJob?.cancel()
         scope.cancel()
         if (!attached) return
         windowManager.removeView(rootView)
@@ -226,7 +243,8 @@ class DesktopPetOverlayView(
         actionRow.visibility = View.GONE
         autoMoveJob?.cancel()
         animationJob?.cancel()
-        if (currentSettings.useCustomImage) {
+        stopPawAnimation()
+        if (currentSettings.usePetPack || currentSettings.useCustomImage) {
             updatePetImageFromSettings()
         } else {
             petImage.setImageResource(R.drawable.cat9_re)
@@ -269,7 +287,8 @@ class DesktopPetOverlayView(
             speechView.visibility = View.GONE
             actionRow.visibility = View.GONE
             animationJob?.cancel()
-            if (currentSettings.useCustomImage) {
+            stopPawAnimation()
+            if (currentSettings.usePetPack || currentSettings.useCustomImage) {
                 updatePetImageFromSettings()
             } else {
                 petImage.setImageResource(R.drawable.cat9_re)
@@ -302,19 +321,21 @@ class DesktopPetOverlayView(
 
     private fun playMoodSequence(mood: PetMood) {
         if (collapsedToEdge) {
-            petImage.setImageResource(R.drawable.cat9_re)
+            if (!currentSettings.usePetPack && !currentSettings.useCustomImage) {
+                petImage.setImageResource(R.drawable.cat9_re)
+            }
+            stopPawAnimation()
             return
         }
-        if (currentSettings.useCustomImage) {
+        if (currentSettings.usePetPack || currentSettings.useCustomImage) {
             updatePetImageFromSettings()
+            schedulePawAnimation(mood)
             return
         }
         animationJob?.cancel()
         animationJob = scope.launch {
             when (mood) {
-                PetMood.Chill -> {
-                    petImage.setImageResource(R.drawable.cat5_re)
-                }
+                PetMood.Chill -> petImage.setImageResource(R.drawable.cat5_re)
                 PetMood.Happy -> {
                     petImage.setImageResource(R.drawable.cat5_re)
                     delay(220)
@@ -334,11 +355,54 @@ class DesktopPetOverlayView(
                     delay(240)
                     petImage.setImageResource(R.drawable.cat5_re)
                 }
-                PetMood.Hungry -> {
-                    petImage.setImageResource(R.drawable.cat5_re)
-                }
+                PetMood.Hungry -> petImage.setImageResource(R.drawable.cat5_re)
             }
         }
+        schedulePawAnimation(mood)
+    }
+
+    private fun schedulePawAnimation(mood: PetMood) {
+        pawAnimJob?.cancel()
+        val pack = currentPack ?: run { pawView.visibility = View.GONE; return }
+        val animParams = currentSettings.petStyle.toAnimParams()
+        pawAnimJob = scope.launch {
+            when (mood) {
+                PetMood.Excited -> {
+                    val beatDuration = (600 / animParams.speedMultiplier).toLong()
+                    while (true) {
+                        pawView.setImageBitmap(pack.pawDown)
+                        pawView.visibility = View.VISIBLE
+                        delay(beatDuration / 2)
+                        pawView.setImageBitmap(pack.pawUp)
+                        delay(beatDuration / 2)
+                    }
+                }
+                PetMood.Happy -> {
+                    val beatDuration = (700 / animParams.speedMultiplier).toLong()
+                    pawView.setImageBitmap(pack.pawDown)
+                    pawView.visibility = View.VISIBLE
+                    delay(beatDuration / 2)
+                    pawView.setImageBitmap(pack.pawUp)
+                    delay(beatDuration / 2)
+                    stopPawAnimation()
+                }
+                PetMood.Chill -> {
+                    delay(3_000)
+                    pawView.setImageBitmap(pack.pawDown)
+                    pawView.visibility = View.VISIBLE
+                    delay(400)
+                    pawView.setImageBitmap(pack.pawUp)
+                    delay(400)
+                    stopPawAnimation()
+                }
+                else -> stopPawAnimation()
+            }
+        }
+    }
+
+    private fun stopPawAnimation() {
+        pawAnimJob?.cancel()
+        pawView.visibility = View.GONE
     }
 
     private fun setupActionButtons() {
@@ -368,30 +432,78 @@ class DesktopPetOverlayView(
     }
 
     private fun updatePetImageFromSettings() {
-        val customBitmap = PetImageResolver.decodeBitmap(context, currentSettings.imageUri)
-        if (customBitmap != null) {
-            petImage.setImageBitmap(customBitmap)
-        } else {
-            petImage.setImageResource(R.drawable.cat5_re)
-        }
         val size = dp(132f * currentSettings.sizeScale)
         petFrame.layoutParams = LinearLayout.LayoutParams(size, size)
         petFrame.minimumWidth = size
         petFrame.minimumHeight = size
         petImage.layoutParams = FrameLayout.LayoutParams(size, size, Gravity.CENTER)
         rootView.requestLayout()
+
+        when {
+            currentSettings.usePetPack -> {
+                scope.launch(Dispatchers.IO) {
+                    val pack = PetPackLoader.loadFromDir(context, currentSettings.petPackDir)
+                    launch(Dispatchers.Main) {
+                        currentPack = pack
+                        if (pack != null) {
+                            petImage.setImageBitmap(pack.body)
+                            applyPawLayout(pack, size)
+                            pawView.setImageBitmap(pack.pawUp)
+                            pawView.visibility = View.GONE
+                        } else {
+                            petImage.setImageResource(R.drawable.cat5_re)
+                            pawView.visibility = View.GONE
+                        }
+                    }
+                }
+            }
+            currentSettings.useCustomImage -> {
+                currentPack = null
+                scope.launch(Dispatchers.IO) {
+                    val bitmap = PetImageResolver.decodeAndRemoveBackground(context, currentSettings.imageUri)
+                        ?: PetImageResolver.decodeBitmap(context, currentSettings.imageUri)
+                    launch(Dispatchers.Main) {
+                        if (bitmap != null) {
+                            petImage.setImageBitmap(bitmap)
+                        } else {
+                            petImage.setImageResource(R.drawable.cat5_re)
+                        }
+                        pawView.visibility = View.GONE
+                    }
+                }
+            }
+            else -> {
+                currentPack = null
+                petImage.setImageResource(R.drawable.cat5_re)
+                pawView.visibility = View.GONE
+            }
+        }
+    }
+
+    private fun applyPawLayout(pack: PetPack, containerSize: Int) {
+        val cfg = pack.pawConfig
+        val pawW = (containerSize * cfg.widthRatio).toInt()
+        val pawH = (pawW.toFloat() * pack.pawUp.height / pack.pawUp.width).toInt()
+        val offsetX = ((containerSize * cfg.xRatio) - pawW / 2).toInt()
+        val offsetY = ((containerSize * cfg.yRatio) - pawH / 2).toInt()
+        val lp = FrameLayout.LayoutParams(pawW, pawH)
+        lp.leftMargin = offsetX
+        lp.topMargin = offsetY
+        pawView.layoutParams = lp
     }
 
     private fun scheduleAutoMove() {
         autoMoveJob?.cancel()
         if (!currentSettings.autoMoveEnabled || expanded || collapsedToEdge || !attached) return
+        val animParams = currentSettings.petStyle.toAnimParams()
+        val baseDelay = (3_000 / animParams.speedMultiplier).toLong()
         autoMoveJob = scope.launch {
-            delay(3_000)
-            if (!expanded && !collapsedToEdge && attached && System.currentTimeMillis() - lastInteractionAt >= 3_000) {
-                val drift = dp(18)
+            delay(baseDelay)
+            if (!expanded && !collapsedToEdge && attached && System.currentTimeMillis() - lastInteractionAt >= baseDelay) {
+                val drift = dp(18f * animParams.bounceMagnitude)
                 val direction = if (dockOnRight) -1 else 1
                 overlayLayoutParams.x = clampX(overlayLayoutParams.x + drift * direction)
-                overlayLayoutParams.y = clampY(overlayLayoutParams.y - dp(8))
+                overlayLayoutParams.y = clampY(overlayLayoutParams.y - dp(8f * animParams.bounceMagnitude))
                 updateOverlayPosition()
                 lastInteractionAt = System.currentTimeMillis()
                 scheduleAutoMove()
@@ -418,31 +530,21 @@ class DesktopPetOverlayView(
     }
 
     private fun screenWidth(): Int = context.resources.displayMetrics.widthPixels
-
     private fun screenHeight(): Int = context.resources.displayMetrics.heightPixels
-
     private fun collapsedWidth(): Int = dp(132) + dp(16)
-
     private fun collapsedHeight(): Int = dp(132) + dp(16)
-
     private fun expandedWidth(): Int = dp(260)
+    private fun expandedHeight(): Int = collapsedHeight() + dp(96)
 
-    private fun expandedHeight(): Int {
-        return collapsedHeight() + dp(96)
-    }
-
-    private fun unspecifiedMeasureSpec(): Int {
-        return View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
-    }
+    private fun unspecifiedMeasureSpec(): Int =
+        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
 
     private fun roundedDrawable(fillColor: Int, radiusDp: Float, strokeColor: Int): GradientDrawable {
         return GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = dp(radiusDp).toFloat()
             setColor(fillColor)
-            if (strokeColor != 0) {
-                setStroke(dp(1), strokeColor)
-            }
+            if (strokeColor != 0) setStroke(dp(1), strokeColor)
         }
     }
 
@@ -450,11 +552,5 @@ class DesktopPetOverlayView(
         return View(context).apply {
             layoutParams = LinearLayout.LayoutParams(width, height)
         }
-    }
-
-    private fun dp(value: Int): Int = dp(value.toFloat())
-
-    private fun dp(value: Float): Int {
-        return (value * context.resources.displayMetrics.density).toInt()
     }
 }

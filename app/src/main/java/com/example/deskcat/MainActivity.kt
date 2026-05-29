@@ -26,6 +26,7 @@ class MainActivity : ComponentActivity() {
     private var overlayGrantedState by mutableStateOf(false)
     private lateinit var petPreferencesRepository: PetPreferencesRepository
     private var pendingImageUriHandler: ((Uri?) -> Unit)? = null
+    private var pendingZipUriHandler: ((Uri?) -> Unit)? = null
 
     private val imagePickerLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
@@ -37,6 +38,10 @@ class MainActivity : ComponentActivity() {
             }
         }
         pendingImageUriHandler?.invoke(uri)
+    }
+
+    private val zipPickerLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        pendingZipUriHandler?.invoke(uri)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,6 +66,10 @@ class MainActivity : ComponentActivity() {
                         onPickCustomImage = { onPicked ->
                             pendingImageUriHandler = onPicked
                             imagePickerLauncher.launch(arrayOf("image/*"))
+                        },
+                        onImportPetPack = { onPicked ->
+                            pendingZipUriHandler = onPicked
+                            zipPickerLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "*/*"))
                         },
                         onOpenOverlayPermission = {
                             startActivity(OverlayPermissionHelper.createManageOverlayPermissionIntent(this))
